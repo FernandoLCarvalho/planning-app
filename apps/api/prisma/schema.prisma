@@ -1,0 +1,281 @@
+// Prisma schema — Personal Adaptive Planner
+// PostgreSQL + Prisma Client JS
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum PlanningStyle {
+  BALANCED
+  INTENSE
+  LIGHT
+}
+
+enum NotificationTolerance {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum TrainingTimePreference {
+  MORNING
+  AFTERNOON
+  EVENING
+}
+
+enum EnergyPattern {
+  MORNING_PEAK
+  EVENING_PEAK
+  STEADY
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum AnchorType {
+  WAKE_UP
+  SLEEP
+  MEAL
+  WORK_START
+}
+
+enum WeeklyPlanStatus {
+  SUGGESTED
+  ACCEPTED
+  ARCHIVED
+}
+
+enum ActivityType {
+  TRAINING
+  STUDY
+  WORK
+  REST
+  MEAL
+  SPOUSE
+  BUFFER
+  OTHER
+}
+
+enum BlockPriority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum BlockFlexibility {
+  FIXED
+  FLEXIBLE
+  OPTIONAL
+}
+
+enum EnergyDemand {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum BlockStatus {
+  PENDING
+  COMPLETED
+  SKIPPED
+  MOVED
+  DROPPED
+}
+
+enum BlockSource {
+  AI
+  MANUAL
+}
+
+enum RevisionType {
+  INITIAL_GENERATION
+  URGENCY_REPLAN
+  MANUAL_EDIT
+  REGENERATION
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model User {
+  id               String  @id @default(cuid())
+  email            String  @unique
+  passwordHash     String
+  refreshTokenHash String?
+
+  preferences             UserPreferences?
+  weeklyPlanningRequests  WeeklyPlanningRequest[]
+  weeklyPlans             WeeklyPlan[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UserPreferences {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  planningStyle          PlanningStyle          @default(BALANCED)
+  notificationTolerance  NotificationTolerance  @default(MEDIUM)
+  trainingTimePreference TrainingTimePreference @default(MORNING)
+  energyPattern          EnergyPattern          @default(STEADY)
+
+  // Stored as HH:mm strings to avoid timezone complexity
+  preferredTimeToSleep     String  @default("23:00")
+  preferredWakeWindowStart String  @default("06:00")
+  preferredWakeWindowEnd   String  @default("08:00")
+
+  // Free-form meal defaults (names, times) as JSON for MVP flexibility
+  mealDefaults Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WeeklyPlanningRequest {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Monday of the target week
+  weekStartDate DateTime
+
+  workThisWeek Boolean @default(true)
+
+  trainingSessionsTarget Int?
+  // Nullable: overrides user preferences for this specific week
+  trainingTimePreference TrainingTimePreference?
+
+  wantsStudy   Boolean  @default(false)
+  studyTopics  String[]
+
+  wantsSpouseActivity Boolean @default(false)
+
+  wantsMealPlanning Boolean  @default(false)
+  mealsPerDay       Int?
+  mealNames         String[]
+
+  notes String?
+
+  weeklyPlans WeeklyPlan[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, weekStartDate])
+}
+
+model WeeklyPlan {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  weeklyPlanningRequestId String?
+  weeklyPlanningRequest   WeeklyPlanningRequest? @relation(fields: [weeklyPlanningRequestId], references: [id], onDelete: SetNull)
+
+  // Monday of the planned week
+  weekStartDate DateTime
+
+  version Int @default(1)
+
+  // Self-relation: links a replan to the plan it was derived from
+  basedOnPlanId String?
+  basedOnPlan   WeeklyPlan?  @relation("PlanVersionChain", fields: [basedOnPlanId], references: [id])
+  derivedPlans  WeeklyPlan[] @relation("PlanVersionChain")
+
+  status WeeklyPlanStatus @default(SUGGESTED)
+
+  // AI-generated metadata stored as JSON (strategy, focusLevel, flexibilityLevel, etc.)
+  planMetadata Json?
+
+  dailyAnchors WeeklyPlanDailyAnchor[]
+  blocks       PlannedBlock[]
+  revisions    PlanRevision[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, weekStartDate])
+  @@index([userId, status])
+}
+
+model WeeklyPlanDailyAnchor {
+  id           String     @id @default(cuid())
+  weeklyPlanId String
+  weeklyPlan   WeeklyPlan @relation(fields: [weeklyPlanId], references: [id], onDelete: Cascade)
+
+  dayOfWeek DayOfWeek
+  type      AnchorType
+  time      String     // HH:mm
+  label     String?
+
+  @@index([weeklyPlanId, dayOfWeek])
+}
+
+model PlannedBlock {
+  id           String     @id @default(cuid())
+  weeklyPlanId String
+  weeklyPlan   WeeklyPlan @relation(fields: [weeklyPlanId], references: [id], onDelete: Cascade)
+
+  dayOfWeek DayOfWeek
+
+  activityType ActivityType
+  title        String
+  description  String?
+
+  startTime       String // HH:mm
+  endTime         String // HH:mm
+  durationMinutes Int
+
+  priority     BlockPriority    @default(MEDIUM)
+  flexibility  BlockFlexibility @default(FLEXIBLE)
+  energyDemand EnergyDemand     @default(MEDIUM)
+
+  status BlockStatus @default(PENDING)
+  source BlockSource @default(AI)
+
+  tags String[]
+
+  // Carries the AI-assigned block id for action correlation during replanning
+  externalReferenceId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([weeklyPlanId, dayOfWeek])
+}
+
+model PlanRevision {
+  id           String     @id @default(cuid())
+  weeklyPlanId String
+  weeklyPlan   WeeklyPlan @relation(fields: [weeklyPlanId], references: [id], onDelete: Cascade)
+
+  type RevisionType
+
+  // Free-form message from the user (used in urgency replanning)
+  userMessage String?
+  // AI-generated summary of the changes applied
+  summary     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([weeklyPlanId])
+}
