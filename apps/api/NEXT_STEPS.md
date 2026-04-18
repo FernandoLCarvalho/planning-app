@@ -5,44 +5,46 @@ Ele complementa `docs/backend-brief.md` com o estado atual da implementação.
 
 ## Estado atual
 - Bootstrap NestJS + Fastify concluído.
-- Swagger em `/docs` (requer `@fastify/static`, já instalado).
+- Swagger em `/docs`.
 - `ValidationPipe` global ativo.
 - `ConfigModule` global.
 - `PrismaService` e `PrismaModule` globais.
 - Schema Prisma completo com todos os modelos e enums do MVP.
 - Migrações aplicadas: `20260418222033_init`, `20260418222456_add_refresh_token_hash`.
 - `@prisma/client` gerado.
-- `AuthModule` completo e testado:
-  - `POST /auth/register` — bcrypt hash, cria User, retorna tokens
-  - `POST /auth/login` — valida credenciais, retorna tokens
-  - `POST /auth/refresh` — verifica refresh token, rotaciona par
-  - `GET /auth/me` — requer `Authorization: Bearer <accessToken>`
-  - `JwtStrategy`, `JwtAuthGuard`, `@CurrentUser()` prontos para reutilização
-- `JwtAuthGuard` e `AuthService` exportados para uso em outros módulos.
+- `AuthModule` completo:
+  - `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me`
+  - `JwtAuthGuard`, `@CurrentUser()` exportados e reutilizados por outros módulos
 - `UsersModule` implementado:
-  - `GET /users/me` — retorna dados básicos do usuário autenticado.
+  - `GET /users/me`
 - `UserPreferencesModule` implementado:
-  - `GET /users/me/preferences` — upsert on first access (cria defaults se não existir).
-  - `PUT /users/me/preferences` — valida e persiste preferências completas.
-  - DTO com validações: enums, `HH:mm` regex, wake window ordering no service.
+  - `GET /users/me/preferences` — upsert on first access
+  - `PUT /users/me/preferences` — valida enums, HH:mm, wake window ordering
+- `WeeklyPlanningRequestsModule` implementado:
+  - `POST /weekly-planning-requests` — cria request, userId vem do JWT
+  - `GET /weekly-planning-requests/:id` — verifica ownership
+  - `PUT /weekly-planning-requests/:id` — atualização parcial, verifica ownership
+  - Validações condicionais via `@ValidateIf`:
+    - `wantsStudy = true` → `studyTopics` (array, mínimo 1)
+    - `wantsMealPlanning = true` → `mealsPerDay` (int >= 1) e `mealNames` (array, mínimo 1)
+    - `trainingSessionsTarget` opcional, se presente deve ser >= 1
 
 ## Próximo passo recomendado
-Implementar o módulo `weekly-planning-requests`.
+Implementar o schema Zod do AI planner e, em seguida, o módulo `weekly-plans`.
 
-### weekly-planning-requests
-- `POST /weekly-planning-requests` — cria um novo request com DTO completo.
-- `GET /weekly-planning-requests/:id` — retorna um request específico.
-- `PUT /weekly-planning-requests/:id` — atualiza um request existente.
-- DTO conforme `docs/backend-brief.md §9` (`CreateWeeklyPlanningRequestDto`).
-- Validações condicionais:
-  - se `wantsStudy = true`, `studyTopics` deve existir e ter ao menos um item;
-  - se `wantsMealPlanning = true`, `mealsPerDay` e `mealNames` devem existir;
-  - se `trainingSessionsTarget` existir, deve ser `>= 1`.
-- Pertence ao usuário autenticado (`userId` do JWT, não do body).
+### ai-planner (schema e validador)
+- Criar `AIPlannerResponseSchema` em Zod dentro de `modules/ai-planner/`.
+- Cobrir: `planMetadata`, `dailyAnchors`, `blocks`, `actions`, `notes`, `warnings`.
+- Criar `AIResponseValidatorService` que parseia e valida o output do modelo.
+- Ver contrato completo em `docs/backend-brief.md §10`.
 
-Após `weekly-planning-requests`, a ordem é:
-1. `ai-planner` — criar `AIPlannerResponseSchema` em Zod.
-2. `weekly-plans` — geração, current, confirm.
+### weekly-plans (geração e leitura)
+- `POST /weekly-plans/generate` — orquestra geração via AI planner.
+- `GET /weekly-plans/current` — retorna o plano ativo mais recente.
+- `GET /weekly-plans/:id` — retorna plano por id.
+- `POST /weekly-plans/:id/confirm` — confirma um plano sugerido.
+- `POST /weekly-plans/:id/reject` — rejeita um plano.
+- `POST /weekly-plans/:id/replan` — gera nova versão a partir de urgência.
 
 ## Lembretes operacionais
 - Importar `AuthModule` nos módulos que precisam de `JwtAuthGuard`.
