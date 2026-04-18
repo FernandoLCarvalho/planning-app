@@ -49,3 +49,5 @@ prisma/dev.db-journal
 # Misc
 .tmp/
 tmp/
+
+CLAUDE

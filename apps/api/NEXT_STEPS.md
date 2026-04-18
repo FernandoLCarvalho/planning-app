@@ -28,23 +28,44 @@ Ele complementa `docs/backend-brief.md` com o estado atual da implementação.
     - `wantsStudy = true` → `studyTopics` (array, mínimo 1)
     - `wantsMealPlanning = true` → `mealsPerDay` (int >= 1) e `mealNames` (array, mínimo 1)
     - `trainingSessionsTarget` opcional, se presente deve ser >= 1
+- `AiPlannerModule` implementado:
+  - `AIPlannerResponseSchema` — contrato Zod completo para o output do modelo
+    - valida `planMetadata`, `dailyAnchors`, `blocks`, `actions`, `notes`, `warnings`
+    - valida enums (DayOfWeek, AnchorType, ActivityType, Priority, Flexibility, EnergyDemand, ActionType)
+    - valida formato HH:mm para campos de tempo
+  - `AIResponseValidatorService` — parseia JSON raw, valida contra schema Zod, retorna resultado tipado
+  - `AIPlannerService` — stub com resposta determinística; substitua `call()` pela integração real
+  - `PlanningContextBuilderService` — skeleton que compila contexto (request + preferences)
+  - `PromptAssemblerService` — skeleton que monta prompt a partir do contexto
+- `WeeklyPlansModule` implementado:
+  - `POST /weekly-plans/generate` — orquestra geração completa end-to-end
+    - verifica ownership do `WeeklyPlanningRequest`
+    - carrega `UserPreferences`
+    - constrói contexto → monta prompt → chama AI → valida output
+    - persiste `WeeklyPlan` + `WeeklyPlanDailyAnchor[]` + `PlannedBlock[]` + `PlanRevision` em uma transaction
+    - retorna `WeeklyPlanReadModel` pronto para renderização
 
 ## Próximo passo recomendado
-Implementar o schema Zod do AI planner e, em seguida, o módulo `weekly-plans`.
+Substituir o `AIPlannerService` stub pela integração real com o Anthropic SDK e implementar os demais endpoints de `weekly-plans`.
 
-### ai-planner (schema e validador)
-- Criar `AIPlannerResponseSchema` em Zod dentro de `modules/ai-planner/`.
-- Cobrir: `planMetadata`, `dailyAnchors`, `blocks`, `actions`, `notes`, `warnings`.
-- Criar `AIResponseValidatorService` que parseia e valida o output do modelo.
-- Ver contrato completo em `docs/backend-brief.md §10`.
+### ai-planner — integração real
+- Instalar `@anthropic-ai/sdk`.
+- Implementar `AIPlannerService.call()` usando `anthropic.messages.create()`.
+- Passar `systemPrompt` e `userPrompt` da `AssembledPrompt`.
+- Capturar o output de texto da resposta e retornar como string raw para o validator.
+- Registrar metadados de execução (provider, model, latência, tamanho do contexto).
 
-### weekly-plans (geração e leitura)
-- `POST /weekly-plans/generate` — orquestra geração via AI planner.
-- `GET /weekly-plans/current` — retorna o plano ativo mais recente.
-- `GET /weekly-plans/:id` — retorna plano por id.
-- `POST /weekly-plans/:id/confirm` — confirma um plano sugerido.
-- `POST /weekly-plans/:id/reject` — rejeita um plano.
-- `POST /weekly-plans/:id/replan` — gera nova versão a partir de urgência.
+### prompt-assembler — construção estruturada
+- Expandir `PromptAssemblerService.assemble()` com o contexto completo:
+  - preferências do usuário (energy pattern, training preference, sleep/wake window)
+  - intenções da semana (workThisWeek, studyTopics, training target, meal planning)
+  - instruções de formato JSON e enums aceitos
+
+### weekly-plans — endpoints restantes
+- `GET /weekly-plans/current` — plano ativo mais recente do usuário
+- `GET /weekly-plans/:id` — plano por id, com ownership check
+- `POST /weekly-plans/:id/confirm` — muda status para ACCEPTED, arquiva versões anteriores
+- `POST /weekly-plans/:id/reject` — muda status para ARCHIVED
 
 ## Lembretes operacionais
 - Importar `AuthModule` nos módulos que precisam de `JwtAuthGuard`.
@@ -52,3 +73,4 @@ Implementar o schema Zod do AI planner e, em seguida, o módulo `weekly-plans`.
 - Usar `PrismaService` diretamente enquanto as queries forem simples.
 - Zod apenas para contratos críticos internos (AI response).
 - Transações nos fluxos de geração e replanejamento.
+- Replanning (`POST /weekly-plans/:id/replan`) fica para depois dos endpoints básicos de leitura e confirmação.
